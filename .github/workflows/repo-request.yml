@@ -12,16 +12,13 @@ concurrency:
 jobs:
   handle:
     name: Process decision
-    # Only run when a decision label is applied to a repo-request issue
-    if: |
-      contains(github.event.issue.labels.*.name, 'repo-request') &&
-      (github.event.label.name == 'approved' || github.event.label.name == 'rejected')
+    if: contains(github.event.issue.labels.*.name, 'repo-request') && (github.event.label.name == 'approved' || github.event.label.name == 'rejected')
     runs-on: ubuntu-latest
     permissions:
       issues: write
 
     steps:
-      # ── 1. Verify the person who applied the label is an org admin ──────────
+      # ── 1. Verify the labeler is an org admin ────────────────────────────────
       - name: Verify org admin
         id: verify
         uses: actions/github-script@v7
@@ -33,33 +30,29 @@ jobs:
 
             try {
               const { data } = await github.rest.orgs.getMembershipForUser({ org, username: sender });
-
               if (data.role !== 'admin') throw new Error('not an org admin');
-
               core.setOutput('authorized', 'true');
-              core.info(`✅ ${sender} is an org admin — proceeding`);
-
+              core.info(`✅ ${sender} is an org admin`);
             } catch {
               core.setOutput('authorized', 'false');
-              core.warning(`⛔ ${sender} is not an org admin — removing label`);
+              core.warning(`⛔ ${sender} is not an org admin`);
 
-              // Remove the label so the issue stays open for a real admin
               await github.rest.issues.removeLabel({
                 owner: context.repo.owner,
-                repo:  context.repo.repo,
+                repo: context.repo.repo,
                 issue_number: context.payload.issue.number,
                 name: context.payload.label.name,
               }).catch(() => {});
 
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
-                repo:  context.repo.repo,
+                repo: context.repo.repo,
                 issue_number: context.payload.issue.number,
-                body: `⛔ @${sender} — only **org admins** can approve or reject requests.\nThe label has been removed. Please wait for an admin to review this request.`,
+                body: `⛔ @${sender} — only **org admins** can approve or reject requests.\nThe label has been removed.`,
               });
             }
 
-      # ── 2. Parse the structured issue form body ─────────────────────────────
+      # ── 2. Parse the issue form body ─────────────────────────────────────────
       - name: Parse issue body
         id: parse
         if: steps.verify.outputs.authorized == 'true'
@@ -76,65 +69,54 @@ jobs:
               const match   = body.match(pattern);
               if (!match) return '';
               const val = match[1].trim();
-              return (val === '_No response_' || val === '') ? '' : val;
+              return (val === '_No response_') ? '' : val;
             }
 
-            const repoName    = extract('Repository Name').trim().replace(/\s+/g, '-');
-            const description = extract('Description');
-            const visibility  = (extract('Visibility') || 'Private').toLowerCase();
-            const team        = extract('Team').toLowerCase().replace(/\s+/g, '-');
-            const email       = extract('Your Email Address');
+            const repoName   = extract('Repository Name').trim().replace(/\s+/g, '-');
+            const visibility = (extract('Visibility') || 'Private').toLowerCase();
+            const team       = extract('Team').toLowerCase().replace(/\s+/g, '-');
+            const email      = extract('Your Email Address');
+            const validName  = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,98}[a-zA-Z0-9]$|^[a-zA-Z0-9]$/.test(repoName);
 
-            // Validate: GitHub allows letters, numbers, hyphens, underscores, dots
-            const validName = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,98}[a-zA-Z0-9]$|^[a-zA-Z0-9]$/.test(repoName);
+            core.setOutput('repo_name',  repoName);
+            core.setOutput('description', extract('Description'));
+            core.setOutput('visibility', visibility);
+            core.setOutput('team',       team);
+            core.setOutput('email',      email);
+            core.setOutput('requester',  requester);
+            core.setOutput('action',     action);
+            core.setOutput('valid_name', String(validName));
 
-            core.setOutput('repo_name',    repoName);
-            core.setOutput('description',  description);
-            core.setOutput('visibility',   visibility);
-            core.setOutput('team',         team);
-            core.setOutput('email',        email);
-            core.setOutput('requester',    requester);
-            core.setOutput('action',       action);
-            core.setOutput('valid_name',   validName.toString());
+            core.info(`repo: ${repoName} | visibility: ${visibility} | valid: ${validName}`);
 
-            core.info(`repo_name:   ${repoName}`);
-            core.info(`visibility:  ${visibility}`);
-            core.info(`email:       ${email}`);
-            core.info(`valid_name:  ${validName}`);
-
-      # ── 3a. Block approval if repo name is invalid ──────────────────────────
-      - name: Abort — invalid repo name
-        if: |
-          steps.verify.outputs.authorized == 'true'  &&
-          steps.parse.outputs.action      == 'approved' &&
-          steps.parse.outputs.valid_name  == 'false'
+      # ── 3a. Block if repo name is invalid ────────────────────────────────────
+      - name: Abort - invalid repo name
+        if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'approved' && steps.parse.outputs.valid_name == 'false'
         uses: actions/github-script@v7
+        env:
+          REPO_NAME: ${{ steps.parse.outputs.repo_name }}
         with:
           script: |
             await github.rest.issues.createComment({
-              owner:        context.repo.owner,
-              repo:         context.repo.repo,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               issue_number: context.payload.issue.number,
               body: [
                 '## ❌ Cannot create repository — invalid name',
                 '',
-                `\`${{ steps.parse.outputs.repo_name }}\` is not a valid GitHub repository name.`,
+                `\`${process.env.REPO_NAME}\` is not a valid GitHub repository name.`,
                 '',
-                '**Rules:** letters, numbers, hyphens \`-\`, underscores \`_\`, and dots \`.\` only.',
-                'Must start and end with a letter or number. Max 100 characters.',
+                '**Rules:** letters, numbers, hyphens `-`, underscores `_`, dots `.` only. Must start and end with a letter or number.',
                 '',
-                'Please close this issue and open a new request with a corrected name.',
+                'Please close this issue and open a new request with a valid name.',
               ].join('\n'),
             });
-            core.setFailed('Invalid repository name — aborting');
+            core.setFailed('Invalid repository name');
 
-      # ── 3b. Create the GitHub repository ────────────────────────────────────
+      # ── 3b. Create the GitHub repository ─────────────────────────────────────
       - name: Create repository
         id: create
-        if: |
-          steps.verify.outputs.authorized == 'true'  &&
-          steps.parse.outputs.action      == 'approved' &&
-          steps.parse.outputs.valid_name  == 'true'
+        if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'approved' && steps.parse.outputs.valid_name == 'true'
         uses: actions/github-script@v7
         env:
           REPO_NAME:   ${{ steps.parse.outputs.repo_name }}
@@ -145,29 +127,26 @@ jobs:
         with:
           github-token: ${{ secrets.GH_ADMIN_TOKEN }}
           script: |
-            const org         = context.repo.owner;
-            const name        = process.env.REPO_NAME;
-            const description = process.env.DESCRIPTION;
-            const visibility  = process.env.VISIBILITY;
-            const team        = process.env.TEAM;
-            const requester   = process.env.REQUESTER;
+            const org        = context.repo.owner;
+            const name       = process.env.REPO_NAME;
+            const team       = process.env.TEAM;
+            const requester  = process.env.REQUESTER;
 
-            // ── Create repo ────────────────────────────────────────────────
+            // Create repo
             let repo;
             try {
               const { data } = await github.rest.repos.createInOrg({
                 org,
                 name,
-                description,
-                visibility,
+                description:   process.env.DESCRIPTION,
+                visibility:    process.env.VISIBILITY,
                 auto_init:     true,
                 has_issues:    true,
                 has_projects:  false,
                 has_wiki:      false,
-                has_downloads: false,
               });
               repo = data;
-              core.info(`✅ Repo created: ${repo.html_url}`);
+              core.info(`✅ Created: ${repo.html_url}`);
             } catch (err) {
               const msg = err.status === 422
                 ? `Repository "${name}" already exists in the organization.`
@@ -176,18 +155,13 @@ jobs:
               return;
             }
 
-            core.setOutput('repo_url',       repo.html_url);
-            core.setOutput('repo_full_name', repo.full_name);
+            core.setOutput('repo_url', repo.html_url);
 
-            // ── Assign team (non-fatal) ────────────────────────────────────
+            // Assign team (non-fatal)
             if (team) {
               try {
                 await github.rest.teams.addOrUpdateRepoPermissionsInOrg({
-                  org,
-                  team_slug:  team,
-                  owner:      org,
-                  repo:       name,
-                  permission: 'push',
+                  org, team_slug: team, owner: org, repo: name, permission: 'push',
                 });
                 core.info(`✅ Team "${team}" granted push access`);
               } catch (err) {
@@ -195,132 +169,119 @@ jobs:
               }
             }
 
-            // ── Add requester as collaborator (non-fatal) ──────────────────
+            // Add requester as collaborator (non-fatal)
             try {
               await github.rest.repos.addCollaborator({
-                owner:      org,
-                repo:       name,
-                username:   requester,
-                permission: 'push',
+                owner: org, repo: name, username: requester, permission: 'push',
               });
               core.info(`✅ @${requester} added as collaborator`);
             } catch (err) {
-              core.warning(`Could not add requester as collaborator: ${err.message}`);
+              core.warning(`Collaborator invite failed: ${err.message}`);
             }
 
-      # ── 4a. Comment + close issue — approved & created ──────────────────────
-      - name: Comment — approved
-        if: |
-          steps.verify.outputs.authorized == 'true'  &&
-          steps.parse.outputs.action      == 'approved' &&
-          steps.create.outcome            == 'success'
+      # ── 4a. Comment + close — approved ───────────────────────────────────────
+      - name: Comment - approved
+        if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'approved' && steps.create.outcome == 'success'
         uses: actions/github-script@v7
+        env:
+          REPO_NAME:  ${{ steps.parse.outputs.repo_name }}
+          REPO_URL:   ${{ steps.create.outputs.repo_url }}
+          VISIBILITY: ${{ steps.parse.outputs.visibility }}
+          REQUESTER:  ${{ steps.parse.outputs.requester }}
+          TEAM:       ${{ steps.parse.outputs.team }}
         with:
           script: |
-            const repoUrl  = '${{ steps.create.outputs.repo_url }}';
-            const repoName = '${{ steps.parse.outputs.repo_name }}';
+            const rows = [
+              `| **Repository** | [\`${process.env.REPO_NAME}\`](${process.env.REPO_URL}) |`,
+              `| **Visibility** | ${process.env.VISIBILITY} |`,
+              `| **Requester**  | @${process.env.REQUESTER} |`,
+            ];
+            if (process.env.TEAM) rows.push(`| **Team** | \`${process.env.TEAM}\` |`);
 
             await github.rest.issues.createComment({
-              owner:        context.repo.owner,
-              repo:         context.repo.repo,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              body: [
-                '## ✅ Repository Created',
-                '',
-                '| | |',
-                '|---|---|',
-                `| **Repository** | [\`${repoName}\`](${repoUrl}) |`,
-                `| **Visibility** | ${{ steps.parse.outputs.visibility }} |`,
-                `| **Requester**  | @${{ steps.parse.outputs.requester }} |`,
-                ${{ steps.parse.outputs.team != '' && '"| **Team** | `' + steps.parse.outputs.team + '` |",' || '"",' }}
-                '',
-                '> 📧 An email notification has been sent to the requester.',
-              ].filter(Boolean).join('\n'),
+              body: ['## ✅ Repository Created', '', '| | |', '|---|---|', ...rows, '', '> 📧 Notification email sent to requester.'].join('\n'),
             });
 
             await github.rest.issues.addLabels({
-              owner:        context.repo.owner,
-              repo:         context.repo.repo,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              labels:       ['completed'],
+              labels: ['completed'],
             });
 
             await github.rest.issues.update({
-              owner:        context.repo.owner,
-              repo:         context.repo.repo,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              state:        'closed',
+              state: 'closed',
               state_reason: 'completed',
             });
 
-      # ── 4b. Comment + close issue — rejected ────────────────────────────────
-      - name: Comment — rejected
-        if: |
-          steps.verify.outputs.authorized == 'true' &&
-          steps.parse.outputs.action      == 'rejected'
+      # ── 4b. Comment + close — rejected ───────────────────────────────────────
+      - name: Comment - rejected
+        if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'rejected'
         uses: actions/github-script@v7
+        env:
+          REPO_NAME: ${{ steps.parse.outputs.repo_name }}
+          REQUESTER: ${{ steps.parse.outputs.requester }}
         with:
           script: |
             await github.rest.issues.createComment({
-              owner:        context.repo.owner,
-              repo:         context.repo.repo,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               issue_number: context.payload.issue.number,
               body: [
                 '## ❌ Request Rejected',
                 '',
-                `Your request for \`${{ steps.parse.outputs.repo_name }}\` has been reviewed and **rejected**.`,
+                `Your request for \`${process.env.REPO_NAME}\` has been reviewed and **rejected**.`,
                 '',
-                'If you have additional context or believe this decision is incorrect, please open a new request with more detail.',
+                'If you have additional context, please open a new request with more detail.',
                 '',
-                '> 📧 An email notification has been sent to the requester.',
+                '> 📧 Notification email sent to requester.',
               ].join('\n'),
             });
 
             await github.rest.issues.addLabels({
-              owner:        context.repo.owner,
-              repo:         context.repo.repo,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              labels:       ['rejected'],
+              labels: ['rejected'],
             });
 
             await github.rest.issues.update({
-              owner:        context.repo.owner,
-              repo:         context.repo.repo,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               issue_number: context.payload.issue.number,
-              state:        'closed',
+              state: 'closed',
               state_reason: 'not_planned',
             });
 
-      # ── 4c. Comment if creation failed ──────────────────────────────────────
-      - name: Comment — creation failed
-        if: |
-          steps.verify.outputs.authorized == 'true'  &&
-          steps.parse.outputs.action      == 'approved' &&
-          steps.create.outcome            == 'failure'
+      # ── 4c. Comment if creation failed ───────────────────────────────────────
+      - name: Comment - creation failed
+        if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'approved' && steps.create.outcome == 'failure'
         uses: actions/github-script@v7
         with:
           script: |
             const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             await github.rest.issues.createComment({
-              owner:        context.repo.owner,
-              repo:         context.repo.repo,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
               issue_number: context.payload.issue.number,
               body: [
                 '## ⚠️ Repository Creation Failed',
                 '',
                 'The request was approved but the repository could not be created automatically.',
                 '',
-                `Please check the [workflow run](${runUrl}) for the error details and create the repository manually.`,
+                `See the [workflow run](${runUrl}) for error details.`,
               ].join('\n'),
             });
 
-      # ── 5. Send approval email ───────────────────────────────────────────────
+      # ── 5. Send approval email ────────────────────────────────────────────────
       - name: Send approval email
-        if: |
-          steps.verify.outputs.authorized == 'true'  &&
-          steps.parse.outputs.action      == 'approved' &&
-          steps.create.outcome            == 'success'  &&
-          steps.parse.outputs.email       != ''
+        if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'approved' && steps.create.outcome == 'success' && steps.parse.outputs.email != ''
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_FROM:     ${{ secrets.EMAIL_FROM }}
@@ -333,44 +294,40 @@ jobs:
           python3 << 'EOF'
           import json, os, sys, urllib.request
 
-          repo_name  = os.environ["REPO_NAME"]
-          repo_url   = os.environ["REPO_URL"]
-          requester  = os.environ["REQUESTER"]
-          visibility = os.environ["VISIBILITY"].capitalize()
+          name = os.environ["REPO_NAME"]
+          url  = os.environ["REPO_URL"]
+          who  = os.environ["REQUESTER"]
+          vis  = os.environ["VISIBILITY"].capitalize()
 
-          html = f"""<!DOCTYPE html>
-          <html lang="en"><head><meta charset="UTF-8"><style>
-            body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f4f5;margin:0;padding:0}}
-            .w{{max-width:540px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.12)}}
-            .h{{background:#18181b;padding:24px 32px}}.h h1{{color:#fff;margin:0;font-size:18px;font-weight:600}}
-            .b{{padding:32px;color:#374151;line-height:1.65;font-size:15px}}
-            .b p{{margin:0 0 16px}}
-            .card{{background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;margin:20px 0}}
-            .card table{{width:100%;border-collapse:collapse}}
-            .card td{{padding:7px 0;font-size:14px;vertical-align:top}}
-            .card td:first-child{{color:#6b7280;width:130px;font-weight:500}}
-            .btn{{display:inline-block;padding:11px 24px;background:#16a34a;color:#fff;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px}}
-            .f{{padding:16px 32px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af}}
-          </style></head>
-          <body><div class="w">
-            <div class="h"><h1>Repo Request System</h1></div>
-            <div class="b">
-              <p>Hi <strong>@{requester}</strong>,</p>
-              <p>Your repository request has been <strong>approved</strong> and the repository is ready to use.</p>
-              <div class="card"><table>
-                <tr><td>Repository</td><td><strong>{repo_name}</strong></td></tr>
-                <tr><td>Visibility</td><td>{visibility}</td></tr>
-                <tr><td>URL</td><td><a href="{repo_url}">{repo_url}</a></td></tr>
-              </table></div>
-              <p><a href="{repo_url}" class="btn">Open Repository →</a></p>
-            </div>
-            <div class="f">Automated notification · Do not reply to this email.</div>
+          html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><style>
+          body{{font-family:-apple-system,sans-serif;background:#f4f4f5;margin:0;padding:0}}
+          .w{{max-width:540px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.1)}}
+          .h{{background:#18181b;padding:24px 32px}}.h h1{{color:#fff;margin:0;font-size:18px;font-weight:600}}
+          .b{{padding:32px;color:#374151;line-height:1.65}}.b p{{margin:0 0 16px}}
+          .card{{background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;margin:20px 0}}
+          .card table{{width:100%;border-collapse:collapse}}
+          .card td{{padding:6px 0;font-size:14px}}.card td:first-child{{color:#6b7280;width:120px;font-weight:500}}
+          .btn{{display:inline-block;padding:11px 24px;background:#16a34a;color:#fff;border-radius:6px;text-decoration:none;font-weight:600;font-size:14px}}
+          .f{{padding:16px 32px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af}}
+          </style></head><body><div class="w">
+          <div class="h"><h1>Repo Request System</h1></div>
+          <div class="b">
+            <p>Hi <strong>@{who}</strong>,</p>
+            <p>Your repository request has been <strong>approved</strong> and is ready to use.</p>
+            <div class="card"><table>
+              <tr><td>Repository</td><td><strong>{name}</strong></td></tr>
+              <tr><td>Visibility</td><td>{vis}</td></tr>
+              <tr><td>URL</td><td><a href="{url}">{url}</a></td></tr>
+            </table></div>
+            <p><a href="{url}" class="btn">Open Repository →</a></p>
+          </div>
+          <div class="f">Automated notification · Do not reply.</div>
           </div></body></html>"""
 
           payload = {
             "from":    os.environ.get("EMAIL_FROM", "Repo Requests <onboarding@resend.dev>"),
             "to":      [os.environ["TO_EMAIL"]],
-            "subject": f"✅ Repo approved — {repo_name}",
+            "subject": f"✅ Repo approved — {name}",
             "html":    html,
           }
           req = urllib.request.Request(
@@ -381,17 +338,14 @@ jobs:
           )
           try:
             with urllib.request.urlopen(req, timeout=10) as r:
-              print(f"Email sent — status {r.status}")
+              print(f"Email sent — HTTP {r.status}")
           except Exception as e:
             print(f"Warning: email failed (non-fatal): {e}", file=sys.stderr)
           EOF
 
-      # ── 6. Send rejection email ──────────────────────────────────────────────
+      # ── 6. Send rejection email ───────────────────────────────────────────────
       - name: Send rejection email
-        if: |
-          steps.verify.outputs.authorized == 'true' &&
-          steps.parse.outputs.action      == 'rejected' &&
-          steps.parse.outputs.email       != ''
+        if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'rejected' && steps.parse.outputs.email != ''
         env:
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           EMAIL_FROM:     ${{ secrets.EMAIL_FROM }}
@@ -402,40 +356,36 @@ jobs:
           python3 << 'EOF'
           import json, os, sys, urllib.request
 
-          repo_name = os.environ["REPO_NAME"]
-          requester = os.environ["REQUESTER"]
+          name = os.environ["REPO_NAME"]
+          who  = os.environ["REQUESTER"]
 
-          html = f"""<!DOCTYPE html>
-          <html lang="en"><head><meta charset="UTF-8"><style>
-            body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f4f5;margin:0;padding:0}}
-            .w{{max-width:540px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.12)}}
-            .h{{background:#18181b;padding:24px 32px}}.h h1{{color:#fff;margin:0;font-size:18px;font-weight:600}}
-            .b{{padding:32px;color:#374151;line-height:1.65;font-size:15px}}
-            .b p{{margin:0 0 16px}}
-            .card{{background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;margin:20px 0}}
-            .card table{{width:100%;border-collapse:collapse}}
-            .card td{{padding:7px 0;font-size:14px;vertical-align:top}}
-            .card td:first-child{{color:#6b7280;width:130px;font-weight:500}}
-            .f{{padding:16px 32px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af}}
-          </style></head>
-          <body><div class="w">
-            <div class="h"><h1>Repo Request System</h1></div>
-            <div class="b">
-              <p>Hi <strong>@{requester}</strong>,</p>
-              <p>Your request for repository <strong>{repo_name}</strong> has been <strong>rejected</strong> after review.</p>
-              <div class="card"><table>
-                <tr><td>Repository</td><td>{repo_name}</td></tr>
-                <tr><td>Status</td><td>Rejected</td></tr>
-              </table></div>
-              <p>If you have additional context or believe this is a mistake, please open a new request with more detail.</p>
-            </div>
-            <div class="f">Automated notification · Do not reply to this email.</div>
+          html = f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><style>
+          body{{font-family:-apple-system,sans-serif;background:#f4f4f5;margin:0;padding:0}}
+          .w{{max-width:540px;margin:40px auto;background:#fff;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.1)}}
+          .h{{background:#18181b;padding:24px 32px}}.h h1{{color:#fff;margin:0;font-size:18px;font-weight:600}}
+          .b{{padding:32px;color:#374151;line-height:1.65}}.b p{{margin:0 0 16px}}
+          .card{{background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:16px;margin:20px 0}}
+          .card table{{width:100%;border-collapse:collapse}}
+          .card td{{padding:6px 0;font-size:14px}}.card td:first-child{{color:#6b7280;width:120px;font-weight:500}}
+          .f{{padding:16px 32px;border-top:1px solid #e5e7eb;font-size:12px;color:#9ca3af}}
+          </style></head><body><div class="w">
+          <div class="h"><h1>Repo Request System</h1></div>
+          <div class="b">
+            <p>Hi <strong>@{who}</strong>,</p>
+            <p>Your request for <strong>{name}</strong> has been <strong>rejected</strong> after review.</p>
+            <div class="card"><table>
+              <tr><td>Repository</td><td>{name}</td></tr>
+              <tr><td>Status</td><td>Rejected</td></tr>
+            </table></div>
+            <p>If you have additional context, please open a new request with more detail.</p>
+          </div>
+          <div class="f">Automated notification · Do not reply.</div>
           </div></body></html>"""
 
           payload = {
             "from":    os.environ.get("EMAIL_FROM", "Repo Requests <onboarding@resend.dev>"),
             "to":      [os.environ["TO_EMAIL"]],
-            "subject": f"❌ Repo request rejected — {repo_name}",
+            "subject": f"❌ Repo request rejected — {name}",
             "html":    html,
           }
           req = urllib.request.Request(
@@ -446,7 +396,7 @@ jobs:
           )
           try:
             with urllib.request.urlopen(req, timeout=10) as r:
-              print(f"Email sent — status {r.status}")
+              print(f"Email sent — HTTP {r.status}")
           except Exception as e:
             print(f"Warning: email failed (non-fatal): {e}", file=sys.stderr)
           EOF
