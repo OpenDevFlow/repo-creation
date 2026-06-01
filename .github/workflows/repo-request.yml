@@ -179,7 +179,178 @@ jobs:
               core.warning(`Collaborator invite failed: ${err.message}`);
             }
 
-      # ── 4a. Comment + close — approved ───────────────────────────────────────
+      # ── 4a. Populate repo with default templates and LICENSE ─────────────────
+      - name: Populate repository defaults
+        if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'approved' && steps.create.outcome == 'success'
+        uses: actions/github-script@v7
+        env:
+          REPO_NAME: ${{ steps.parse.outputs.repo_name }}
+        with:
+          github-token: ${{ secrets.GH_ADMIN_TOKEN }}
+          script: |
+            const org  = context.repo.owner;
+            const repo = process.env.REPO_NAME;
+            const year = new Date().getFullYear();
+            const b64  = s => Buffer.from(s).toString('base64');
+            const msg  = 'chore: add default templates and LICENSE';
+
+            const license = [
+              'MIT License',
+              '',
+              `Copyright (c) ${year} ${org}`,
+              '',
+              'Permission is hereby granted, free of charge, to any person obtaining a copy',
+              'of this software and associated documentation files (the "Software"), to deal',
+              'in the Software without restriction, including without limitation the rights',
+              'to use, copy, modify, merge, publish, distribute, sublicense, and/or sell',
+              'copies of the Software, and to permit persons to whom the Software is',
+              'furnished to do so, subject to the following conditions:',
+              '',
+              'The above copyright notice and this permission notice shall be included in all',
+              'copies or substantial portions of the Software.',
+              '',
+              'THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR',
+              'IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,',
+              'FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE',
+              'AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER',
+              'LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,',
+              'OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE',
+              'SOFTWARE.',
+            ].join('\n');
+
+            const bugReport = [
+              'name: Bug Report',
+              'description: Report a bug or unexpected behaviour',
+              'title: "[Bug] "',
+              'labels: ["bug"]',
+              'body:',
+              '  - type: markdown',
+              '    attributes:',
+              '      value: "Thanks for reporting a bug. Fill in as much detail as you can."',
+              '',
+              '  - type: textarea',
+              '    id: description',
+              '    attributes:',
+              '      label: What happened?',
+              '      description: A clear description of the bug.',
+              '    validations:',
+              '      required: true',
+              '',
+              '  - type: textarea',
+              '    id: reproduction',
+              '    attributes:',
+              '      label: Steps to reproduce',
+              '      placeholder: |',
+              "        1. Go to '...'",
+              "        2. Click on '...'",
+              '        3. See error',
+              '    validations:',
+              '      required: true',
+              '',
+              '  - type: textarea',
+              '    id: expected',
+              '    attributes:',
+              '      label: Expected behaviour',
+              '    validations:',
+              '      required: true',
+              '',
+              '  - type: textarea',
+              '    id: environment',
+              '    attributes:',
+              '      label: Environment',
+              '      placeholder: |',
+              '        - OS: macOS 14',
+              '        - Runtime: Node 20',
+              '        - Version: 1.0.0',
+            ].join('\n');
+
+            const featureRequest = [
+              'name: Feature Request',
+              'description: Suggest a new feature or improvement',
+              'title: "[Feature] "',
+              'labels: ["enhancement"]',
+              'body:',
+              '  - type: markdown',
+              '    attributes:',
+              '      value: "Thanks for suggesting an improvement!"',
+              '',
+              '  - type: textarea',
+              '    id: problem',
+              '    attributes:',
+              '      label: Problem statement',
+              '      description: What problem does this solve? Who is affected?',
+              '    validations:',
+              '      required: true',
+              '',
+              '  - type: textarea',
+              '    id: solution',
+              '    attributes:',
+              '      label: Proposed solution',
+              '      description: Describe what you would like to happen.',
+              '    validations:',
+              '      required: true',
+              '',
+              '  - type: textarea',
+              '    id: alternatives',
+              '    attributes:',
+              '      label: Alternatives considered',
+              '',
+              '  - type: dropdown',
+              '    id: priority',
+              '    attributes:',
+              '      label: Priority',
+              '      options:',
+              '        - Low',
+              '        - Medium',
+              '        - High',
+              '    validations:',
+              '      required: true',
+            ].join('\n');
+
+            const prTemplate = [
+              '## Summary',
+              '',
+              '<!-- What does this PR do and why? Link related issues with "Fixes #123". -->',
+              '',
+              '## Changes',
+              '',
+              '- ',
+              '',
+              '## Test plan',
+              '',
+              '- [ ] ',
+              '',
+              '## Checklist',
+              '',
+              '- [ ] Tests added or updated',
+              '- [ ] Documentation updated (if applicable)',
+              '- [ ] No breaking changes (or clearly documented below)',
+              '',
+              '## Breaking changes',
+              '',
+              'N/A',
+            ].join('\n');
+
+            const files = [
+              { path: 'LICENSE',                                       content: license       },
+              { path: '.github/ISSUE_TEMPLATE/bug-report.yml',         content: bugReport     },
+              { path: '.github/ISSUE_TEMPLATE/feature-request.yml',    content: featureRequest },
+              { path: '.github/PULL_REQUEST_TEMPLATE.md',              content: prTemplate    },
+            ];
+
+            for (const { path, content } of files) {
+              try {
+                await github.rest.repos.createOrUpdateFileContents({
+                  owner: org, repo, path, message: msg,
+                  content: b64(content),
+                });
+                core.info(`✅ Created ${path}`);
+              } catch (err) {
+                core.warning(`Could not create ${path}: ${err.message}`);
+              }
+            }
+
+      # ── 5a. Comment + close — approved ───────────────────────────────────────
       - name: Comment - approved
         if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'approved' && steps.create.outcome == 'success'
         uses: actions/github-script@v7
@@ -220,7 +391,7 @@ jobs:
               state_reason: 'completed',
             });
 
-      # ── 4b. Comment + close — rejected ───────────────────────────────────────
+      # ── 5b. Comment + close — rejected ───────────────────────────────────────
       - name: Comment - rejected
         if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'rejected'
         uses: actions/github-script@v7
@@ -259,7 +430,7 @@ jobs:
               state_reason: 'not_planned',
             });
 
-      # ── 4c. Comment if creation failed ───────────────────────────────────────
+      # ── 5c. Comment if creation failed ───────────────────────────────────────
       - name: Comment - creation failed
         if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'approved' && steps.create.outcome == 'failure'
         uses: actions/github-script@v7
@@ -279,7 +450,7 @@ jobs:
               ].join('\n'),
             });
 
-      # ── 5. Send approval email ────────────────────────────────────────────────
+      # ── 6. Send approval email ────────────────────────────────────────────────
       - name: Send approval email
         if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'approved' && steps.create.outcome == 'success' && steps.parse.outputs.email != ''
         env:
@@ -343,7 +514,7 @@ jobs:
             print(f"Warning: email failed (non-fatal): {e}", file=sys.stderr)
           EOF
 
-      # ── 6. Send rejection email ───────────────────────────────────────────────
+      # ── 7. Send rejection email ───────────────────────────────────────────────
       - name: Send rejection email
         if: steps.verify.outputs.authorized == 'true' && steps.parse.outputs.action == 'rejected' && steps.parse.outputs.email != ''
         env:
