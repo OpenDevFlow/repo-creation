@@ -1,0 +1,75 @@
+name: Repository Request
+description: Request a new GitHub repository for the organization
+title: "[Repo Request] "
+labels: ["repo-request"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## New Repository Request
+        Fill in the fields below. An admin will review your request and you'll receive an email with the decision.
+
+  - type: input
+    id: repo-name
+    attributes:
+      label: Repository Name
+      description: Letters, numbers, hyphens, underscores, and dots only. Must start and end with a letter or number.
+      placeholder: my-new-service
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: One or two sentences describing the repository's purpose.
+      placeholder: "API service for processing..."
+    validations:
+      required: true
+
+  - type: dropdown
+    id: visibility
+    attributes:
+      label: Visibility
+      description: Who should be able to see this repository?
+      options:
+        - Private
+        - Internal
+        - Public
+    validations:
+      required: true
+
+  - type: input
+    id: team
+    attributes:
+      label: Team
+      description: Team slug to grant push access (optional). Leave blank if none.
+      placeholder: backend-team
+
+  - type: textarea
+    id: justification
+    attributes:
+      label: Business Justification
+      description: Why does this repository need to be created? What will it be used for?
+      placeholder: "This repository will house the new payment microservice required for..."
+    validations:
+      required: true
+
+  - type: input
+    id: email
+    attributes:
+      label: Your Email Address
+      description: Where to send the approval or rejection notification.
+      placeholder: you@company.com
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I have verified this repository does not already exist in the organization.
+          required: true
+        - label: I understand this request requires admin approval before the repository is created.
+          required: true

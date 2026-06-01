@@ -1,0 +1,46 @@
+name: Setup Labels
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup:
+    name: Create required labels
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+
+    steps:
+      - name: Create or update labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = [
+              { name: 'repo-request', color: '0075ca', description: 'Repository creation request'      },
+              { name: 'approved',     color: '0e8a16', description: 'Request approved by org admin'    },
+              { name: 'rejected',     color: 'd73a4a', description: 'Request rejected by org admin'    },
+              { name: 'completed',    color: '6f42c1', description: 'Repository created successfully'  },
+            ];
+
+            for (const label of labels) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  ...label,
+                });
+                core.info(`Created: ${label.name}`);
+              } catch (err) {
+                if (err.status === 422) {
+                  await github.rest.issues.updateLabel({
+                    owner: context.repo.owner,
+                    repo:  context.repo.repo,
+                    ...label,
+                  });
+                  core.info(`Updated: ${label.name}`);
+                } else {
+                  core.warning(`Failed on "${label.name}": ${err.message}`);
+                }
+              }
+            }
+            core.info('✅ All labels ready');
